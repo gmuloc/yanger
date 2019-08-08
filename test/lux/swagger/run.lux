@@ -37,6 +37,19 @@
 
 [endmacro]
 
+[macro compile_exclude yangfile exclude_pathfilter]
+    [progress \ngenerate swagger from: $yangfile ...]
+    [progress with exclude path filter $exclude_pathfilter ...\n]
+
+    # this will generate (json) swagger definition file and validate the json
+    # using the swagger-path-exclude option
+    !yanger -p . -t expand -f swagger $yangfile --swagger-host 127.0.0.1:8008 --swagger-basepath /restconf --swagger-version "my swagger version 1.0.0.1" --swagger-tag-mode all --swagger-terms "http://my-terms.example.com" --swagger-contact-name "my contact name" --swagger-contact-url "http://my-contact-url.example.com" --swagger-contact-email "my-contact-email@example.com" --swagger-license-name "my license name" --swagger-license-url "http://my-license-url.example.com" --swagger-top-resource all --swagger-omit-query-params false --swagger-omit-body-params false --swagger-omit-form-params false --swagger-omit-header-params false --swagger-omit-path-params false --swagger-omit-standard-statuses false --swagger-methods "post, get, patch, put, delete, head, options" --swagger-path-exclude $exclude_pathfilter | python -m json.tool > $yangfile.path.swagger.json
+
+    !echo ==$$?==
+    ?==0==
+
+[endmacro]
+
 [macro compile_path_top yangfile pathfilter topresource]
     [progress \ngenerate swagger from: $yangfile ...]
     [progress with path filter $pathfilter ...]
@@ -135,6 +148,38 @@
 
     # escape.yang
     [invoke compile_path escape.yang \"rpc1\"]
+    [invoke validate_swagger_20 escape.yang.path.swagger.json]
+
+    #
+    # generation with exclude path
+    #
+
+    # standard RESTCONF RFC example-jukebox.yang
+    [invoke compile_exclude example-jukebox.yang \"example-jukebox:jukebox/library\"]
+    [invoke validate_swagger_20 example-jukebox.yang.path.swagger.json]
+
+    # extended example-jukebox.yang
+    [invoke compile_exclude example-jukebox-extended.yang \"types-test\"]
+    [invoke validate_swagger_20 example-jukebox-extended.yang.path.swagger.json]
+
+    # new.yang
+    [invoke compile_exclude new.yang \"/data/example-jukebox:l1\"]
+    [invoke validate_swagger_20 new.yang.path.swagger.json]
+
+    # simple.yang
+    [invoke compile_exclude simple.yang \"top/ids\"]
+    [invoke validate_swagger_20 simple.yang.path.swagger.json]
+
+    # types.yang
+    [invoke compile_exclude types.yang \"e2\"]
+    [invoke validate_swagger_20 types.yang.path.swagger.json]
+
+    # types-1.1.yang
+    [invoke compile_exclude types-1.1.yang \"types/l6\"]
+    [invoke validate_swagger_20 types-1.1.yang.path.swagger.json]
+
+    # escape.yang
+    [invoke compile_exclude escape.yang \"rpc1\"]
     [invoke validate_swagger_20 escape.yang.path.swagger.json]
 
     #

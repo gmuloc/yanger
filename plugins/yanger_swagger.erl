@@ -73,7 +73,8 @@ init(Ctx0) ->
           omit_path_params,
           omit_standard_statuses,
           methods,
-          path_filter
+          path_filter,
+          path_exclude
          }).
 
 option_specs() ->
@@ -173,7 +174,12 @@ option_specs() ->
        %% --swagger-path <path-filter>
        {path_filter, undefined, "swagger-path-filter", string,
         "Filter out paths matching a path filter. "
-        "Example: --swagger-path-filter \"/data/example-jukebox/jukebox\""}
+        "Example: --swagger-path-filter \"/data/example-jukebox/jukebox\""},
+
+       %% --swagger-exclude <path-filter>
+       {path_exclude, undefined, "swagger-path-exclude", string,
+        "Exclude paths matching a path filter. "
+        "Example: --swagger-path-exclude \"/data/example-jukebox/jukebox\""}
 
       ]
      }].
@@ -212,6 +218,7 @@ mk_options(Ctx) ->
     Methods = parse_input_methods(
                 proplists:get_value(methods, Ctx#yctx.options)),
     PathFilter = proplists:get_value(path_filter, Ctx#yctx.options),
+    PathExclude = proplists:get_value(path_exclude, Ctx#yctx.options),
     #options{host                   = Host,
              path                   = Path,
              version                = Version,
@@ -230,7 +237,8 @@ mk_options(Ctx) ->
              omit_path_params       = OmitPP,
              omit_standard_statuses = OmitStatuses,
              methods                = Methods,
-             path_filter            = PathFilter}.
+             path_filter            = PathFilter,
+             path_exclude           = PathExclude}.
 
 
 %% parse a comma separated HTTP method string, eg: "post, get"
@@ -427,10 +435,11 @@ print_parameters(Fd, Opts) ->
     F = fun ({_N, P}, Acc) ->
                 [P|Acc];
             ({_N, Path, P}, Acc) ->
-                case match_path(Opts#options.path_filter, Path) of
-                    true ->
+                case {exclude_path(Opts#options.path_exclude, Path),
+                    match_path(Opts#options.path_filter, Path)} of
+                  {false, true} ->
                         [P|Acc];
-                    _ ->
+                  _ ->
                         Acc
                 end
         end,
@@ -457,10 +466,14 @@ print_definitions(Fd, Opts) ->
     Lvl = 1,
     Indent2 = indent(Lvl),
     F = fun({_N, Path, D}, Acc) ->
-                case match_path(Opts#options.path_filter, Path) of
-                    true ->
+                case {exclude_path(Opts#options.path_exclude, Path),
+                    match_path(Opts#options.path_filter, Path)} of
+                  {false, true} ->
+                        %% Note: in my case trying to suppress private container
+                        %% still appearing in definition of data because Path is
+                        %% not specific enough.
                         [D|Acc];
-                    _ ->
+                  _ ->
                         Acc
                 end
         end,
@@ -683,8 +696,11 @@ print_property(Chs, Mod, Fd, PathStr, Mode, Opts) ->
     PathParams = path_params(Mod, base, Mode, Lvl + 4),
     Methods = methods(Mod, Mod, PathParams, Mode, base, PathStr, Opts, Lvl + 2),
     Match = match_path(Opts#options.path_filter, PathStr),
+    Exclude = exclude_path(Opts#options.path_exclude, PathStr),
 
-    if Match ->
+    if Exclude ->
+            skip;
+      Match ->
             print_methods(Methods, PathStr, Fd, Lvl + 1);
        true ->
             skip
@@ -692,7 +708,7 @@ print_property(Chs, Mod, Fd, PathStr, Mode, Opts) ->
 
     io:format(Fd, "~s",
               [delimiter_nl(has_path_node(Chs, Mod, PathStr, true, Opts)
-                            andalso Match)]),
+                            andalso not Exclude andalso Match)]),
     print_paths(Chs, Mod, Fd, Lvl,
                 PathStr, PathParams, Mode, _IsTopNode = true, Opts).
 
@@ -703,7 +719,8 @@ has_path_node(_All = [#sn{kind = Kind, children = Children} = Child | Chs],
               Mod, Path, IsTopNode, Opts) ->
     BasePath = base_path(Child, Mod, Path, IsTopNode),
     Match = match_path(Opts#options.path_filter, BasePath),
-    if Kind /= 'choice' andalso Kind /= 'case' andalso Match ->
+    Exclude = exclude_path(Opts#options.path_exclude, BasePath),
+    if Kind /= 'choice' andalso Kind /= 'case' andalso not Exclude andalso Match ->
             %% stop - we found a data node which matches the filter
             true;
        true ->
@@ -733,6 +750,17 @@ match_path([], _Path) ->
     %% NOTE: empty match string -> match nothing
     false;
 match_path(MatchStr, Path) ->
+    binary:match(iolist_to_binary(Path), iolist_to_binary(MatchStr)) /= nomatch.
+%%
+%% run exclude on path
+%%
+exclude_path(undefined, _Path) ->
+    %% NOTE: optional filter not set ... keep everything
+    false;
+exclude_path([], _Path) ->
+    %% NOTE: empty match string -> keep nothing
+    false;
+exclude_path(MatchStr, Path) ->
     binary:match(iolist_to_binary(Path), iolist_to_binary(MatchStr)) /= nomatch.
 
 
@@ -765,10 +793,12 @@ print_paths([Child|Chs], Mod, Fd, Lvl, Path, PathParams,
     %% node content
     BasePath = base_path(Child, Mod, Path, IsTopNode),
     MatchBase = match_path(Opts#options.path_filter, BasePath),
+    ExcludeBase = exclude_path(Opts#options.path_exclude, BasePath),
 
     %% a schema node may have an extra child path, eg. .../list and .../list=key
     ChildPath = child_path(BasePath, Child),
     MatchChild = match_path(Opts#options.path_filter, ChildPath),
+    ExcludeChild = exclude_path(Opts#options.path_exclude, ChildPath),
 
     BasePathParams = if Opts#options.omit_path_params ->
                              PathParams;
@@ -793,13 +823,13 @@ print_paths([Child|Chs], Mod, Fd, Lvl, Path, PathParams,
                 []
         end,
 
-    if MatchBase ->
+    if not ExcludeBase, MatchBase ->
             print_methods(BaseMethods, BasePath, Fd, Lvl + 1);
        true ->
             skip
     end,
 
-    if ChildMethods /= [], MatchChild ->
+    if ChildMethods /= [], not ExcludeChild, MatchChild ->
             io:format(Fd, "~s", [delimiter_nl(MatchBase)]),
             print_methods(ChildMethods, ChildPath, Fd, Lvl + 1);
        true ->
@@ -809,9 +839,11 @@ print_paths([Child|Chs], Mod, Fd, Lvl, Path, PathParams,
     %% determing next path and next path params
     {NextPath, NextPathParams, MatchNext} =
         if ChildPath == [] ->
-                {BasePath, BasePathParams, MatchBase};
+                {BasePath, BasePathParams, not ExcludeBase andalso MatchBase};
            true ->
-                {ChildPath, ChildPathParams, MatchChild orelse MatchBase}
+                {ChildPath, ChildPathParams,
+                 (not ExcludeChild andalso MatchChild) 
+                 orelse (not ExcludeBase andalso MatchBase)}
         end,
 
     HasPathNodeChildren = has_path_node(Children, Mod, NextPath, false, Opts),
