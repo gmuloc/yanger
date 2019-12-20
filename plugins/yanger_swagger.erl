@@ -1670,6 +1670,20 @@ body_param(HttpMethod, Path, PathType, Mode, SnOrMod, Mod, Lvl) ->
 %%
 %% generate a body from a schema node. Used in body/form params and responses
 %%
+body(json, _, param, HttpMethod, _,
+     _, #sn{config = false, kind = Kind, name = Name}, _, _)
+  when HttpMethod == post; HttpMethod == patch; HttpMethod == put ->
+    %% gmuloche - remove config false node from body param
+    %% TODO check if it makes sense always..
+    %% in PATCH, POST and PUT
+    [];
+body(json, _, param, HttpMethod, _,
+     _, #sn{kind = container, name = private}, _, _)
+  when HttpMethod == post; HttpMethod == patch; HttpMethod == put ->
+    %% gmuloche - remove private container from body for ncs
+    %% TODO: add a flag for ncs maybe
+    %% in PATCH, POST and PUT
+    [];
 body(json, IsTop, Context, HttpMethod, PathType, Mode,
      #sn{kind = choice, children = [FirstChild | _]}, Mod, Lvl) ->
     %% choice - continue with first 'case'
